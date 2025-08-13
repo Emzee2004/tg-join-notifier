@@ -1,23 +1,26 @@
+from fastapi import FastAPI
+import uvicorn
 import os, time
 from datetime import datetime
 from telethon import TelegramClient, events
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH")
 SESSION_NAME = os.getenv("SESSION_NAME", "selfbot")
+STRING_SESSION = os.getenv("STRING_SESSION")
 
 if not API_ID or not API_HASH:
     raise SystemExit("Set API_ID and API_HASH in .env first.")
 
 from telethon.sessions import StringSession
 
-STRING_SESSION = os.getenv("STRING_SESSION")
 client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 
-
+# ------------------- Deduplication -------------------
 _recent = {}
 DEDUP_WINDOW_SEC = 10
 
@@ -31,6 +34,7 @@ def _is_dup(chat_id, user_id):
             del _recent[k]
     return last is not None and (now - last) < DEDUP_WINDOW_SEC
 
+# ------------------- Event Handler -------------------
 @client.on(events.ChatAction)
 async def on_action(event):
     if not (event.user_joined or event.user_added):
@@ -76,9 +80,22 @@ async def on_action(event):
         )
         await client.send_message("me", msg)
 
-async def main():
-    print("✅ Running. Keep this window open. I will DM your Saved Messages on joins.")
-    await client.run_until_disconnected()
+# ------------------- FastAPI App -------------------
+app = FastAPI()
 
-with client:
-    client.loop.run_until_complete(main())
+@app.on_event("startup")
+async def startup_event():
+    async def start_telegram_client():
+        async with client:
+            await client.run_until_disconnected()
+    
+    asyncio.create_task(start_telegram_client())
+
+@app.get("/")
+async def read_root():
+    return {"status": "Bot is running"}
+
+# ------------------- Run on Local -------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
