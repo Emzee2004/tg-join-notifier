@@ -1,0 +1,17 @@
+# local env and sessions
+.env
+*.session
+*.session-journal
+
+# python
+__pycache__/
+*.pyc
+
+# editor / OS
+.vscode/
+Thumbs.db
+.DS_Store
+
+# virtual envs
+.venv/
+env/

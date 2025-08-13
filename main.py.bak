@@ -1,0 +1,80 @@
+import os, time
+from datetime import datetime
+from telethon import TelegramClient, events
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH")
+SESSION_NAME = os.getenv("SESSION_NAME", "selfbot")
+
+if not API_ID or not API_HASH:
+    raise SystemExit("Set API_ID and API_HASH in .env first.")
+
+client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+
+_recent = {}
+DEDUP_WINDOW_SEC = 10
+
+def _is_dup(chat_id, user_id):
+    now = time.time()
+    key = (chat_id, user_id)
+    last = _recent.get(key)
+    _recent[key] = now
+    for k, t in list(_recent.items()):
+        if now - t > 300:
+            del _recent[k]
+    return last is not None and (now - last) < DEDUP_WINDOW_SEC
+
+@client.on(events.ChatAction)
+async def on_action(event):
+    if not (event.user_joined or event.user_added):
+        return
+
+    chat = await event.get_chat()
+    chat_title = getattr(chat, "title", None) or getattr(chat, "username", None) or str(event.chat_id)
+
+    new_users = []
+    if event.user_joined:
+        u = await event.get_user()
+        if u:
+            new_users.append(u)
+    if event.user_added:
+        for u in (event.users or []):
+            new_users.append(u)
+
+    adder = getattr(event, "added_by", None)
+    try:
+        if event.user_added and adder is None:
+            adder = await event.get_user()
+    except:
+        pass
+
+    for u in new_users:
+        if _is_dup(event.chat_id, u.id):
+            continue
+        name = " ".join(filter(None, [u.first_name, u.last_name])) or "(no name)"
+        username = f"@{u.username}" if u.username else "(no username)"
+        when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        added_by_line = ""
+        if event.user_added and adder:
+            adder_name = " ".join(filter(None, [getattr(adder, "first_name", ""), getattr(adder, "last_name", "")])).strip()
+            adder_user = f"@{getattr(adder, 'username', '')}" if getattr(adder, "username", None) else "(no username)"
+            added_by_line = f"\n• Added by: {adder_name} {adder_user} (id {adder.id})"
+
+        msg = (
+            "🔔 New member joined\n"
+            f"• Group: {chat_title}\n"
+            f"• Name: {name} {username}\n"
+            f"• ID: {u.id}\n"
+            f"• When: {when}{added_by_line}"
+        )
+        await client.send_message("me", msg)
+
+async def main():
+    print("✅ Running. Keep this window open. I will DM your Saved Messages on joins.")
+    await client.run_until_disconnected()
+
+with client:
+    client.loop.run_until_complete(main())
