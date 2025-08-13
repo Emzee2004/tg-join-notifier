@@ -3,22 +3,28 @@ import uvicorn
 import os, time
 from datetime import datetime
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH")
-SESSION_NAME = os.getenv("SESSION_NAME", "selfbot")
-
-if not API_ID or not API_HASH:
-    raise SystemExit("Set API_ID and API_HASH in .env first.")
-
-from telethon.sessions import StringSession
-
 STRING_SESSION = os.getenv("STRING_SESSION")
-client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 
+if not API_ID or not API_HASH or not STRING_SESSION:
+    raise SystemExit("Set API_ID, API_HASH, and STRING_SESSION in .env first.")
+
+# Telegram client
+client = TelegramClient(
+    StringSession(STRING_SESSION), 
+    API_ID, 
+    API_HASH,
+    flood_sleep_threshold=10
+)
+
+# Duplicate detection
 _recent = {}
 DEDUP_WINDOW_SEC = 10
 
@@ -32,7 +38,8 @@ def _is_dup(chat_id, user_id):
             del _recent[k]
     return last is not None and (now - last) < DEDUP_WINDOW_SEC
 
-@client.on(events.ChatAction)
+# Listen to all joins in all chats
+@client.on(events.ChatAction(chats=None))
 async def on_action(event):
     try:
         if not (event.user_joined or event.user_added):
@@ -42,19 +49,13 @@ async def on_action(event):
         chat_title = getattr(chat, "title", None) or getattr(chat, "username", None) or str(event.chat_id)
 
         new_users = []
-
         if event.user_joined:
             u = await event.get_user()
             if u:
                 new_users.append(u)
-
         if event.user_added:
             for u in (event.users or []):
                 new_users.append(u)
-            if not new_users:
-                adder = getattr(event, "added_by", None)
-                if adder:
-                    new_users.append(adder)
 
         adder = getattr(event, "added_by", None)
         try:
@@ -66,9 +67,11 @@ async def on_action(event):
         for u in new_users:
             if _is_dup(event.chat_id, u.id):
                 continue
+
             name = " ".join(filter(None, [u.first_name, u.last_name])) or "(no name)"
             username = f"@{u.username}" if u.username else "(no username)"
             when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
             added_by_line = ""
             if event.user_added and adder:
                 adder_name = " ".join(filter(None, [getattr(adder, "first_name", ""), getattr(adder, "last_name", "")])).strip()
@@ -82,15 +85,18 @@ async def on_action(event):
                 f"• ID: {u.id}\n"
                 f"• When: {when}{added_by_line}"
             )
-            await client.send_message("me", msg)
-    except Exception as e:
-        await client.send_message("me", f"⚠️ Error processing join: {e}")
 
+            await client.send_message("me", msg)
+
+    except Exception as e:
+        print(f"Error in on_action: {e}")
+
+# FastAPI app
 app = FastAPI()
 
 @app.on_event("startup")
 async def startup_event():
-    import asyncio
+    # Start the Telegram client in background
     asyncio.create_task(client.start())
 
 @app.get("/")
